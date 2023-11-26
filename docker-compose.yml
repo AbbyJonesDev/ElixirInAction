@@ -1,0 +1,10 @@
+version: "3"
+
+services:
+  elixir-in-action-livebook:
+    image: ghcr.io/livebook-dev/livebook:latest
+    volumes:
+      - ./notebooks:/data
+    ports:
+      - "8080:8080"
+      - "8081:8081"

@@ -1,0 +1,449 @@
+# ToDo List
+
+## Section
+
+```elixir
+defmodule TodoListOne do
+  def new(), do: %{}
+
+  def add_entry(todo_list, date, title) do
+    Map.update(
+      todo_list,
+      date,
+      [title],
+      fn titles -> [title | titles] end
+    )
+  end
+
+  def entries(todo_list, date) do
+    Map.get(todo_list, date, [])
+  end
+end
+```
+
+Create MultiDict abstraction and then use it in TodoList
+
+```elixir
+defmodule MultiDict do
+  def new(), do: %{}
+
+  def add(dict, key, value) do
+    Map.update(dict, key, [value], &[value | &1])
+  end
+
+  def get(dict, key) do
+    Map.get(dict, key, [])
+  end
+end
+
+defmodule TodoListTwo do
+  def new(), do: MultiDict.new()
+
+  # Original implementation - only a title
+  # def add_entry(todo_list, date, title) do
+  #   MultiDict.add(todo_list, date, title)
+  # end
+
+  # Enhanced implementation - add entry data as a map
+  def add_entry(todo_list, entry) do
+    MultiDict.add(todo_list, entry.date, entry)
+  end
+
+  def entries(todo_list, date) do
+    MultiDict.get(todo_list, date)
+  end
+end
+```
+
+Aside - Defining Structs
+
+```elixir
+defmodule Fraction do
+  defstruct a: nil, b: nil
+
+  def new(a, b) do
+    %Fraction{a: a, b: b}
+  end
+
+  def value(%Fraction{a: a, b: b}) do
+    a / b
+  end
+
+  def add(%Fraction{a: a1, b: b1}, %Fraction{a: a2, b: b2}) do
+    new(
+      a1 * b2 + a2 * b1,
+      b2 * b1
+    )
+  end
+end
+
+a = Fraction.new(1, 4)
+b = Fraction.new(1, 4)
+Fraction.add(a, b)
+```
+
+## TodoList Struct Version
+
+```elixir
+defmodule TodoList do
+  defstruct auto_id: 1, entries: %{}
+
+  def new(entries \\ []) do
+    Enum.reduce(
+      entries,
+      %TodoList{},
+      &add_entry(&2, &1)
+      # fn entry, todo_list_acc ->
+      #   add_entry(todo_list_acc, entry)
+      # end
+    )
+  end
+
+  def add_entry(todo_list, entry) do
+    entry = Map.put(entry, :id, todo_list.auto_id)
+
+    new_entries =
+      Map.put(
+        todo_list.entries,
+        todo_list.auto_id,
+        entry
+      )
+
+    %TodoList{
+      todo_list
+      | entries: new_entries,
+        auto_id: todo_list.auto_id + 1
+    }
+  end
+
+  def entries(todo_list, date) do
+    todo_list.entries
+    |> Stream.filter(fn {_id, entry} -> entry.date == date end)
+    |> Enum.map(fn {_id, entry} -> entry end)
+  end
+
+  def update_entry(todo_list, entry_id, updater_fn) do
+    case Map.fetch(todo_list.entries, entry_id) do
+      :error ->
+        todo_list
+
+      {:ok, old_entry} ->
+        old_entry_id = old_entry.id
+        new_entry = %{id: ^old_entry_id} = updater_fn.(old_entry)
+        new_entries = Map.put(todo_list.entries, new_entry.id, new_entry)
+        %TodoList{todo_list | entries: new_entries}
+    end
+  end
+
+  def delete_entry(todo_list, entry_id) do
+    case Map.fetch(todo_list.entries, entry_id) do
+      :error ->
+        todo_list
+
+      {:ok, _} ->
+        new_entries = Map.delete(todo_list.entries, entry_id)
+        %TodoList{todo_list | entries: new_entries}
+    end
+  end
+end
+
+todo_list =
+  TodoList.new()
+  |> TodoList.add_entry(%{date: ~D[2023-11-24], title: "Black Friday Shopping"})
+  |> TodoList.add_entry(%{date: ~D[2023-11-24], title: "Learn Elixir"})
+  |> TodoList.add_entry(%{date: ~D[2023-11-25], title: "Do Nothing"})
+
+TodoList.entries(todo_list, ~D[2023-11-24])
+
+TodoList.update_entry(todo_list, 1, fn entry ->
+  Map.put(entry, :title, "Black Friday Perusing")
+end)
+
+TodoList.delete_entry(todo_list, 3)
+
+entries = [
+  %{date: ~D[2023-11-25], title: "Fall Cleanup"},
+  %{date: ~D[2023-11-26], title: "Archery League"}
+]
+
+list2 = TodoList.new(entries)
+```
+
+### Implemenent Collectable Protocol for TodoList
+
+```elixir
+defimpl Collectable, for: TodoList do
+  def into(original) do
+    {original, &into_callback/2}
+  end
+
+  defp into_callback(todo_list, {:cont, entry}) do
+    TodoList.add_entry(todo_list, entry)
+  end
+
+  defp into_callback(todo_list, :done), do: todo_list
+
+  defp into_callback(_todo_list, :halt), do: :ok
+end
+
+for entry <- entries, into: TodoList.new(), do: entry
+```
+
+## Chapter 5 - Concurrency Primitives
+
+### Database Server
+
+```elixir
+defmodule DatabaseServer do
+  # Interface Functions
+  def start do
+    spawn(fn ->
+      connection = :rand.uniform(1000)
+      loop(connection)
+    end)
+  end
+
+  def run_async(server_pid, query_def) do
+    send(server_pid, {:run_query, self(), query_def})
+  end
+
+  def get_result do
+    receive do
+      {:query_result, result} -> result
+    after
+      5000 -> {:error, :timeout}
+    end
+  end
+
+  # Implementation Functions
+  defp loop(connection) do
+    receive do
+      {:run_query, from_pid, query_def} ->
+        query_result = run_query(connection, query_def)
+        send(from_pid, {:query_result, query_result})
+    end
+
+    loop(connection)
+  end
+
+  defp run_query(connection, query_def) do
+    Process.sleep(2000)
+    "Connection #{connection}: #{query_def} result"
+  end
+end
+```
+
+Simple Database Server Test
+
+```elixir
+server_pid = DatabaseServer.start()
+DatabaseServer.run_async(server_pid, "query 1")
+DatabaseServer.get_result()
+DatabaseServer.run_async(server_pid, "query 2")
+DatabaseServer.get_result()
+```
+
+Heavier Database Server Test
+
+(Will take about 10 seconds to run if uncommented)
+
+```elixir
+# pool = Enum.map(1..100, fn _ -> DatabaseServer.start() end)
+
+# Enum.each(
+#   1..50, 
+#   fn query_def -> 
+#     server_pid = Enum.at(pool, :rand.uniform(100) - 1)
+#     DatabaseServer.run_async(server_pid, query_def)
+#   end
+# )
+
+# Enum.map(1..50, fn _ -> DatabaseServer.get_result() end)
+```
+
+### Calculator
+
+```elixir
+defmodule Calculator do
+  # Interface Functions
+  def start do
+    spawn(fn -> loop(0) end)
+  end
+
+  def value(server_pid) do
+    send(server_pid, {:value, self()})
+
+    receive do
+      {:response, value} -> value
+    end
+  end
+
+  def add(server_pid, value), do: send(server_pid, {:add, value})
+  def sub(server_pid, value), do: send(server_pid, {:sub, value})
+  def mul(server_pid, value), do: send(server_pid, {:mul, value})
+  def div(server_pid, value), do: send(server_pid, {:div, value})
+
+  # Implementation Functions
+  defp loop(current_value) do
+    new_value =
+      receive do
+        message -> process_message(current_value, message)
+      end
+
+    loop(new_value)
+  end
+
+  defp process_message(current_value, {:value, caller}) do
+    send(caller, {:response, current_value})
+    current_value
+  end
+
+  defp process_message(current_value, {:add, value}) do
+    current_value + value
+  end
+
+  defp process_message(current_value, {:sub, value}) do
+    current_value - value
+  end
+
+  defp process_message(current_value, {:mul, value}) do
+    current_value * value
+  end
+
+  defp process_message(current_value, {:div, value}) do
+    current_value / value
+  end
+
+  defp process_message(current_value, invalid_request) do
+    IO.puts("invalid request #{inspect(invalid_request)}")
+    current_value
+  end
+end
+```
+
+Calculator Test
+
+```elixir
+calculator_pid = Calculator.start()
+
+Calculator.value(calculator_pid)
+
+Calculator.add(calculator_pid, 10)
+Calculator.sub(calculator_pid, 5)
+Calculator.mul(calculator_pid, 3)
+Calculator.div(calculator_pid, 5)
+
+Calculator.value(calculator_pid)
+```
+
+### TodoServer
+
+```elixir
+defmodule TodoServer do
+  # Interface Functions
+  def start do
+    spawn(fn -> loop(TodoList.new()) end)
+  end
+
+  def add_entry(todo_server, new_entry) do
+    send(todo_server, {:add_entry, new_entry})
+  end
+
+  def entries(todo_server, date) do
+    send(todo_server, {:entries, self(), date})
+
+    receive do
+      {:todo_entries, entries} -> entries
+    after
+      5000 -> {:error, :timeout}
+    end
+  end
+
+  # Implementation Functions
+  defp loop(todo_list) do
+    new_todo_list =
+      receive do
+        message -> process_message(todo_list, message)
+      end
+
+    loop(new_todo_list)
+  end
+
+  defp process_message(todo_list, {:add_entry, new_entry}) do
+    TodoList.add_entry(todo_list, new_entry)
+  end
+
+  defp process_message(todo_list, {:entries, server_pid, date}) do
+    send(server_pid, {:todo_entries, TodoList.entries(todo_list, date)})
+  end
+end
+```
+
+TodoServer Test
+
+```elixir
+todo_server = TodoServer.start()
+
+TodoServer.add_entry(todo_server, %{date: ~D[2023-11-26], title: "Movies"})
+TodoServer.add_entry(todo_server, %{date: ~D[2023-11-27], title: "Dentist"})
+
+TodoServer.entries(todo_server, ~D[2023-11-26])
+```
+
+TodoServer with a registered PID
+
+```elixir
+defmodule TodoServerTwo do
+  # Interface Functions
+  def start do
+    spawn(fn ->
+      Process.register(self(), :todo_server)
+      IO.puts(Process.whereis(:todo_server))
+      loop(TodoList.new())
+    end)
+  end
+
+  def add_entry(new_entry) do
+    send(:todo_server, {:add_entry, new_entry})
+  end
+
+  def entries(date) do
+    send(:todo_server, {:entries, self(), date})
+
+    receive do
+      {:todo_entries, entries} -> entries
+    after
+      5000 -> {:error, :timeout}
+    end
+  end
+
+  # Implementation Functions
+  defp loop(todo_list) do
+    new_todo_list =
+      receive do
+        message -> process_message(todo_list, message)
+      end
+
+    loop(new_todo_list)
+  end
+
+  defp process_message(todo_list, {:add_entry, new_entry}) do
+    TodoList.add_entry(todo_list, new_entry)
+  end
+
+  defp process_message(todo_list, {:entries, caller, date}) do
+    send(caller, {:todo_entries, TodoList.entries(todo_list, date)})
+  end
+end
+
+# Process.whereis(:todo_server)
+# TodoServerTwo.start()
+# Process.whereis(:todo_server)
+
+# TodoServerTwo.add_entry(%{date: ~D[2023-11-26], title: "Movies"})
+# TodoServerTwo.add_entry(%{date: ~D[2023-11-27], title: "Dentist"})
+
+# TodoServerTwo.entries(~D[2023-11-26])
+```
+
+**Note** - Registered server isn't working in LiveBook, even when checking my code againt the [example](https://github.com/sasa1977/elixir-in-action/blob/master/code_samples/ch05/registered_todo_server.ex).  Curious if this has something to do with how LiveBook uses processes.
