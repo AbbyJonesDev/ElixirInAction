@@ -1,0 +1,78 @@
+# Elixir in Action Part 2
+
+## Chapter 6.1
+
+```elixir
+defmodule ServerProcess do
+  # Interface functions - implemented in the client process
+  def start(callback_module) do
+    spawn(fn ->
+      initial_state = callback_module.init()
+      loop(callback_module, initial_state)
+    end)
+  end
+
+  def call(server_pid, request) do
+    send(server_pid, {request, self()})
+
+    receive do
+      {:response, response} ->
+        response
+    end
+  end
+
+  # Implementation functions - implemented in the server process
+  defp loop(callback_module, current_state) do
+    receive do
+      {request, caller} ->
+        {response, new_state} = callback_module.handle_call(request, current_state)
+        send(caller, {:response, response})
+        loop(callback_module, new_state)
+    end
+  end
+end
+```
+
+```elixir
+defmodule KeyValueStore do
+  # `init` function is called by the server process to get the initial state
+  def init do
+    %{}
+  end
+
+  # `start` function is used as the client interface for the module
+  def start do
+    ServerProcess.start(KeyValueStore)
+  end
+
+  # `put` and `get` functions are used for the client interface
+  def put(pid, key, value) do
+    ServerProcess.call(pid, {:put, key, value})
+  end
+
+  def get(pid, key) do
+    ServerProcess.call(pid, {:get, key})
+  end
+
+  # `handle_call` functions are used by the server process to implement the logic
+  def handle_call({:put, key, value}, state) do
+    {:ok, Map.put(state, key, value)}
+  end
+
+  def handle_call({:get, key}, state) do
+    {Map.get(state, key), state}
+  end
+end
+```
+
+```elixir
+# Calling ServerProcess directly
+pid = ServerProcess.start(KeyValueStore)
+ServerProcess.call(pid, {:put, :some_key, "some value"})
+ServerProcess.call(pid, {:get, :some_key})
+
+# Using interface provided by KeyValueStore
+pid2 = KeyValueStore.start()
+KeyValueStore.put(pid2, :some_key, "another value")
+KeyValueStore.get(pid2, :some_key)
+```
