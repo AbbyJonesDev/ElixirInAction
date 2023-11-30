@@ -2,6 +2,8 @@
 
 ## Chapter 6.1
 
+### ServerProcess module
+
 ```elixir
 defmodule ServerProcess do
   # Interface functions - implemented in the client process
@@ -13,7 +15,7 @@ defmodule ServerProcess do
   end
 
   def call(server_pid, request) do
-    send(server_pid, {request, self()})
+    send(server_pid, {:call, request, self()})
 
     receive do
       {:response, response} ->
@@ -21,17 +23,31 @@ defmodule ServerProcess do
     end
   end
 
+  def cast(server_pid, request) do
+    send(server_pid, {:cast, request})
+  end
+
   # Implementation functions - implemented in the server process
   defp loop(callback_module, current_state) do
     receive do
-      {request, caller} ->
+      {:call, request, caller} ->
         {response, new_state} = callback_module.handle_call(request, current_state)
         send(caller, {:response, response})
         loop(callback_module, new_state)
+
+      {:cast, request} ->
+        new_state = callback_module.handle_cast(request, current_state)
+        loop(callback_module, new_state)
+
+      unhandled ->
+        IO.puts("Unhandled request: #{inspect(unhandled)}")
+        loop(callback_module, current_state)
     end
   end
 end
 ```
+
+### KeyValueStore
 
 ```elixir
 defmodule KeyValueStore do
@@ -47,32 +63,164 @@ defmodule KeyValueStore do
 
   # `put` and `get` functions are used for the client interface
   def put(pid, key, value) do
-    ServerProcess.call(pid, {:put, key, value})
+    ServerProcess.cast(pid, {:put, key, value})
   end
 
   def get(pid, key) do
     ServerProcess.call(pid, {:get, key})
   end
 
-  # `handle_call` functions are used by the server process to implement the logic
-  def handle_call({:put, key, value}, state) do
-    {:ok, Map.put(state, key, value)}
+  # `handle_cast` and `handle_call` functions are used by 
+  # the server process to implement the logic
+  def handle_cast({:put, key, value}, state) do
+    Map.put(state, key, value)
   end
 
   def handle_call({:get, key}, state) do
     {Map.get(state, key), state}
+  end
+
+  def handle_call(request, state) do
+    IO.puts("Unhandled request: #{inspect(request)} - with state #{inspect(state)}")
   end
 end
 ```
 
 ```elixir
 # Calling ServerProcess directly
-pid = ServerProcess.start(KeyValueStore)
-ServerProcess.call(pid, {:put, :some_key, "some value"})
-ServerProcess.call(pid, {:get, :some_key})
+# pid = ServerProcess.start(KeyValueStore)
+# ServerProcess.call(pid, {:put, :some_key, "some value"})
+# ServerProcess.call(pid, {:get, :some_key})
 
 # Using interface provided by KeyValueStore
 pid2 = KeyValueStore.start()
 KeyValueStore.put(pid2, :some_key, "another value")
 KeyValueStore.get(pid2, :some_key)
+KeyValueStore.put(pid2, :name, "Maisie")
+KeyValueStore.get(pid2, :name)
+```
+
+### TodoList
+
+```elixir
+defmodule TodoList do
+  defstruct auto_id: 1, entries: %{}
+
+  def new(entries \\ []) do
+    Enum.reduce(
+      entries,
+      %TodoList{},
+      &add_entry(&2, &1)
+      # fn entry, todo_list_acc ->
+      #   add_entry(todo_list_acc, entry)
+      # end
+    )
+  end
+
+  def add_entry(todo_list, entry) do
+    entry = Map.put(entry, :id, todo_list.auto_id)
+
+    new_entries =
+      Map.put(
+        todo_list.entries,
+        todo_list.auto_id,
+        entry
+      )
+
+    %TodoList{
+      todo_list
+      | entries: new_entries,
+        auto_id: todo_list.auto_id + 1
+    }
+  end
+
+  def entries(todo_list, date) do
+    todo_list.entries
+    |> Stream.filter(fn {_id, entry} -> entry.date == date end)
+    |> Enum.map(fn {_id, entry} -> entry end)
+  end
+
+  def update_entry(todo_list, entry_id, updater_fn) do
+    case Map.fetch(todo_list.entries, entry_id) do
+      :error ->
+        todo_list
+
+      {:ok, old_entry} ->
+        old_entry_id = old_entry.id
+        new_entry = %{id: ^old_entry_id} = updater_fn.(old_entry)
+        new_entries = Map.put(todo_list.entries, new_entry.id, new_entry)
+        %TodoList{todo_list | entries: new_entries}
+    end
+  end
+
+  def delete_entry(todo_list, entry_id) do
+    case Map.fetch(todo_list.entries, entry_id) do
+      :error ->
+        todo_list
+
+      {:ok, _} ->
+        new_entries = Map.delete(todo_list.entries, entry_id)
+        %TodoList{todo_list | entries: new_entries}
+    end
+  end
+end
+
+todo_list =
+  TodoList.new()
+  |> TodoList.add_entry(%{date: ~D[2023-11-24], title: "Black Friday Shopping"})
+  |> TodoList.add_entry(%{date: ~D[2023-11-24], title: "Learn Elixir"})
+  |> TodoList.add_entry(%{date: ~D[2023-11-25], title: "Do Nothing"})
+
+TodoList.entries(todo_list, ~D[2023-11-24])
+
+TodoList.update_entry(todo_list, 1, fn entry ->
+  Map.put(entry, :title, "Black Friday Perusing")
+end)
+
+TodoList.delete_entry(todo_list, 3)
+
+entries = [
+  %{date: ~D[2023-11-25], title: "Fall Cleanup"},
+  %{date: ~D[2023-11-26], title: "Archery League"}
+]
+
+list2 = TodoList.new(entries)
+```
+
+### TodoServer - Refactored
+
+```elixir
+defmodule TodoServer do
+  def init() do
+    TodoList.new()
+  end
+
+  def start do
+    ServerProcess.start(TodoServer)
+  end
+
+  def handle_call({:entries, date}, state) do
+    {TodoList.entries(state, date), state}
+  end
+
+  def handle_cast({:add_entry, new_entry}, state) do
+    TodoList.add_entry(state, new_entry)
+  end
+
+  def add_entry(todo_server, new_entry) do
+    ServerProcess.cast(todo_server, {:add_entry, new_entry})
+    # send(todo_server, {:add_entry, new_entry})
+  end
+
+  def entries(todo_server, date) do
+    ServerProcess.call(todo_server, {:entries, date})
+  end
+end
+```
+
+```elixir
+tds = TodoServer.start()
+TodoServer.add_entry(tds, %{date: ~D[2023-11-24], title: "Black Friday Shopping"})
+TodoServer.add_entry(tds, %{date: ~D[2023-11-28], title: "Set up new MatchErroracBook!"})
+TodoServer.entries(tds, ~D[2023-11-28])
 ```
