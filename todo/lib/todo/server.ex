@@ -1,5 +1,6 @@
 defmodule Todo.Server do
   use GenServer
+
   # Server functions used by GenServer
 
   @impl GenServer
@@ -19,16 +20,15 @@ defmodule Todo.Server do
 
   # Interface functions used by the Todo.Server client
 
-  @spec start() :: :ignore | {:error, any()} | {:ok, pid()}
   def start do
-    GenServer.start(__MODULE__, nil, name: __MODULE__)
+    GenServer.start(__MODULE__, nil)
   end
 
-  def add_entry(new_entry) do
-    GenServer.cast(__MODULE__, {:add_entry, new_entry})
+  def add_entry(pid, new_entry) do
+    GenServer.cast(pid, {:add_entry, new_entry})
   end
 
-  def entries(date) do
-    GenServer.call(__MODULE__, {:entries, date})
+  def entries(pid, date) do
+    GenServer.call(pid, {:entries, date})
   end
 end
