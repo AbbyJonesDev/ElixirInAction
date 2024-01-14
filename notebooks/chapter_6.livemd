@@ -4,6 +4,10 @@
 
 ### ServerProcess module
 
+<!-- livebook:{"break_markdown":true} -->
+
+A simple implementation of a behavior similar to GenServer
+
 ```elixir
 defmodule ServerProcess do
   # Interface functions - implemented in the client process
@@ -14,6 +18,7 @@ defmodule ServerProcess do
     end)
   end
 
+  # Used for synchronous requests - response is returned
   def call(server_pid, request) do
     send(server_pid, {:call, request, self()})
 
@@ -23,6 +28,7 @@ defmodule ServerProcess do
     end
   end
 
+  # Used for async requests - no response returned
   def cast(server_pid, request) do
     send(server_pid, {:cast, request})
   end
@@ -48,6 +54,10 @@ end
 ```
 
 ### KeyValueStore
+
+<!-- livebook:{"break_markdown":true} -->
+
+A module that uses the behavior provided by ServerProcess to implement functionality that allows for adding things to a key/value store and getting back a list of entries
 
 ```elixir
 defmodule KeyValueStore do
@@ -101,6 +111,10 @@ KeyValueStore.get(pid2, :name)
 ```
 
 ### TodoList
+
+<!-- livebook:{"break_markdown":true} -->
+
+The TodoList module as developed in previous chapters
 
 ```elixir
 defmodule TodoList do
@@ -187,16 +201,17 @@ entries = [
 list2 = TodoList.new(entries)
 ```
 
-### TodoServer - Refactored
+### TodoServerB - Refactored to use ServerProcess
+
+<!-- livebook:{"break_markdown":true} -->
+
+A server using the simple ServerProcess module to provide TodoList functionality and keep track of the existing items
 
 ```elixir
-defmodule TodoServer do
+defmodule TodoServerB do
+  # Interface functions used by the ServerProcess
   def init() do
     TodoList.new()
-  end
-
-  def start do
-    ServerProcess.start(TodoServer)
   end
 
   def handle_call({:entries, date}, state) do
@@ -205,6 +220,11 @@ defmodule TodoServer do
 
   def handle_cast({:add_entry, new_entry}, state) do
     TodoList.add_entry(state, new_entry)
+  end
+
+  # Interface functions used by the TodoServerB client
+  def start do
+    ServerProcess.start(TodoServerB)
   end
 
   def add_entry(todo_server, new_entry) do
@@ -219,8 +239,141 @@ end
 ```
 
 ```elixir
-tds = TodoServer.start()
-TodoServer.add_entry(tds, %{date: ~D[2023-11-24], title: "Black Friday Shopping"})
-TodoServer.add_entry(tds, %{date: ~D[2023-11-28], title: "Set up new MatchErroracBook!"})
-TodoServer.entries(tds, ~D[2023-11-28])
+tds = TodoServerB.start()
+TodoServerB.add_entry(tds, %{date: ~D[2023-11-24], title: "Black Friday Shopping"})
+TodoServerB.add_entry(tds, %{date: ~D[2023-11-28], title: "Set up new MacBook!"})
+TodoServerB.entries(tds, ~D[2023-11-28])
+```
+
+### KeyValueStoreB - Using GenServer
+
+```elixir
+defmodule KeyValueStoreB do
+  use GenServer
+
+  # Server Functions 
+
+  # Must return {:ok, initial_state}
+  # @impl enables compile-time checking against the behavior
+  @impl GenServer
+  def init(_) do
+    {:ok, %{}}
+  end
+
+  # Must return {:noreply, new_state}
+  @impl GenServer
+  def handle_cast({:put, key, value}, state) do
+    {:noreply, Map.put(state, key, value)}
+  end
+
+  # Second argument includes the request id and caller pid
+  # Must return {:reply, response, new_state}
+  @impl GenServer
+  def handle_call({:get, key}, _request_meta, state) do
+    {:reply, Map.get(state, key), state}
+  end
+
+  # Interface Functions 
+
+  def start() do
+    # GenServer.start(KeyValueStoreB, nil)
+
+    # use a name for local registration
+    # GenServer.start(KeyValueStoreB, nil, name: KeyValueStoreB)
+
+    # Use the __MODULE__ identifier to dynamically set name
+    GenServer.start(__MODULE__, nil, name: __MODULE__)
+  end
+
+  # If name isn't provided - must include a pid for these calls
+  def put(pid, key, value) do
+    GenServer.cast(pid, {:put, key, value})
+  end
+
+  def get(pid, key) do
+    GenServer.call(pid, {:get, key})
+  end
+
+  # But if a name is provided - you don't need to send the pid anymore
+  def put(key, value) do
+    # GenServer.cast(KeyValueStoreB, {:put, key, value})
+    GenServer.cast(__MODULE__, {:put, key, value})
+  end
+
+  def get(key) do
+    # GenServer.call(KeyValueStoreB, {:get, key})
+    GenServer.call(__MODULE__, {:get, key})
+  end
+end
+```
+
+```elixir
+# Without the local name
+{:ok, pid} = KeyValueStoreB.start()
+# KeyValueStoreB.put(pid, :name, "Chase")
+KeyValueStoreB.get(pid, :name)
+
+GenServer.stop(KeyValueStoreB)
+
+# # With the local name - 
+# # singleton instance, can only have one per BEAM instance
+{:ok, _pid} = KeyValueStoreB.start()
+# KeyValueStoreB.put(:name, "Chase")
+KeyValueStoreB.get(:name)
+
+GenServer.stop(KeyValueStoreB)
+```
+
+The `put` requests above are commented out, because timing issues can arise with starting/stopping servers.  The `put` requests use `handle_cast`, which is asynchronous.
+
+If a local name _isn't_ used, then multiple instances can be started, and everything is fine.  But with a local name - the server process becomes a singleton.  Only one instance can be running at a time, and it has to be stopped before a new instance can be started.
+
+<!-- livebook:{"break_markdown":true} -->
+
+### TodoServer - Using GenServer
+
+```elixir
+defmodule TodoServer do
+  use GenServer
+  # Server functions used by GenServer
+
+  @impl GenServer
+  def init(_) do
+    {:ok, TodoList.new()}
+  end
+
+  @impl GenServer
+  def handle_call({:entries, date}, _request_meta, state) do
+    {:reply, TodoList.entries(state, date), state}
+  end
+
+  @impl GenServer
+  def handle_cast({:add_entry, new_entry}, state) do
+    {:noreply, TodoList.add_entry(state, new_entry)}
+  end
+
+  # Interface functions used by the TodoServer client
+
+  def start do
+    GenServer.start(__MODULE__, nil, name: __MODULE__)
+  end
+
+  def add_entry(new_entry) do
+    GenServer.cast(__MODULE__, {:add_entry, new_entry})
+  end
+
+  def entries(date) do
+    GenServer.call(__MODULE__, {:entries, date})
+  end
+end
+```
+
+```elixir
+# TodoServer.start()
+
+# TodoServer.add_entry(%{date: ~D[2023-11-24], title: "Black Friday Shopping"})
+# TodoServer.add_entry(%{date: ~D[2023-11-28], title: "Set up new MacBook!"})
+# TodoServer.entries(~D[2023-11-28])
+
+GenServer.stop(TodoServer)
 ```
