@@ -4,24 +4,28 @@ defmodule Todo.Server do
   # Server functions used by GenServer
 
   @impl GenServer
-  def init(_) do
-    {:ok, Todo.List.new()}
+  def init(list_name) do
+    {:ok, {list_name, Todo.Database.get(list_name) || Todo.List.new()}}
   end
 
   @impl GenServer
-  def handle_call({:entries, date}, _request_meta, state) do
-    {:reply, Todo.List.entries(state, date), state}
+  def handle_call({:entries, date}, _request_meta, {_list_name, list} = state) do
+    # {:reply, Todo.Database.get(list_name), state}
+    {:reply, Todo.List.entries(list, date), state}
   end
 
   @impl GenServer
-  def handle_cast({:add_entry, new_entry}, state) do
-    {:noreply, Todo.List.add_entry(state, new_entry)}
+  def handle_cast({:add_entry, new_entry}, {list_name, list} = _state) do
+    new_list = Todo.List.add_entry(list, new_entry)
+    Todo.Database.store(list_name, new_list)
+
+    {:noreply, {list_name, new_list}}
   end
 
   # Interface functions used by the Todo.Server client
 
-  def start do
-    GenServer.start(__MODULE__, nil)
+  def start(list_name) do
+    GenServer.start(__MODULE__, list_name)
   end
 
   def add_entry(pid, new_entry) do
