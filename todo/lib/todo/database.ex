@@ -3,8 +3,9 @@ defmodule Todo.Database do
 
   @db_folder "./persist"
 
-  def start() do
-    GenServer.start(__MODULE__, nil, name: __MODULE__)
+  def start_link() do
+    IO.puts("Starting database")
+    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
   end
 
   def store(key, data) do
@@ -38,7 +39,7 @@ defmodule Todo.Database do
   @impl GenServer
   def handle_call({:choose_worker, key}, _from, workers) do
     worker_key = :erlang.phash2(key, 3)
-    IO.puts "Worker Key: #{inspect worker_key}"
+    IO.puts("Worker Key: #{inspect(worker_key)}")
     {:reply, Map.get(workers, worker_key), workers}
   end
 
@@ -47,7 +48,7 @@ defmodule Todo.Database do
   # and the values are the pids of the workers
   defp start_workers() do
     for index <- 1..3, into: %{} do
-      {:ok, pid} = Todo.DatabaseWorker.start(@db_folder)
+      {:ok, pid} = Todo.DatabaseWorker.start_link(@db_folder)
       {index - 1, pid}
     end
   end
