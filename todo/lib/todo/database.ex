@@ -1,11 +1,30 @@
 defmodule Todo.Database do
-  use GenServer
-
+  @pool_size 3
   @db_folder "./persist"
 
   def start_link() do
     IO.puts("Starting database")
-    GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+
+    File.mkdir_p!(@db_folder)
+    children = Enum.map(1..@pool_size, &worker_spec/1)
+    Supervisor.start_link(children, strategy: :one_for_one)
+  end
+
+  defp worker_spec(worker_id) do
+    default_worker_spec = {Todo.DatabaseWorker, {@db_folder, worker_id}}
+    Supervisor.child_spec(default_worker_spec, id: worker_id)
+  end
+
+  # Must be defined manually because module is a supervisor now
+  # and doesn't implement GenServer (which would provide a default)
+  # Child Spec says that module is a supervisor and can be started
+  # by calling start_link
+  def child_spec(_) do
+    %{
+      id: __MODULE__,
+      start: {__MODULE__, :start_link, []},
+      type: :supervisor
+    }
   end
 
   def store(key, data) do
@@ -20,36 +39,7 @@ defmodule Todo.Database do
     |> Todo.DatabaseWorker.get(key)
   end
 
-  # Workers details are stored in the Database server process
-  # Choosing the worker requires a synchronous call to the
-  # Database server process to get a worker's pid
-  # After this - we can delegate the rest of the work to
-  # the worker process, and take advantage of greater concurrency
-  # by having 3 workers
   defp choose_worker(key) do
-    GenServer.call(__MODULE__, {:choose_worker, key})
-  end
-
-  @impl GenServer
-  def init(_) do
-    File.mkdir_p!(@db_folder)
-    {:ok, start_workers()}
-  end
-
-  @impl GenServer
-  def handle_call({:choose_worker, key}, _from, workers) do
-    worker_key = :erlang.phash2(key, 3)
-    IO.puts("Worker Key: #{inspect(worker_key)}")
-    {:reply, Map.get(workers, worker_key), workers}
-  end
-
-  # Create 3 workers and return them in a map
-  # where the keys are 0, 1, and 2
-  # and the values are the pids of the workers
-  defp start_workers() do
-    for index <- 1..3, into: %{} do
-      {:ok, pid} = Todo.DatabaseWorker.start_link(@db_folder)
-      {index - 1, pid}
-    end
+    :erlang.phash2(key, @pool_size) + 1
   end
 end
