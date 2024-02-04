@@ -1,5 +1,24 @@
 defmodule Todo.Server do
-  use GenServer
+  use GenServer, restart: :temporary
+
+  # Interface functions used by the Todo.Server client
+
+  def start_link(list_name) do
+    IO.puts("Starting Todo Server for #{list_name}")
+    GenServer.start_link(__MODULE__, list_name, name: via_tuple(list_name))
+  end
+
+  def add_entry(pid, new_entry) do
+    GenServer.cast(pid, {:add_entry, new_entry})
+  end
+
+  def entries(pid, date) do
+    GenServer.call(pid, {:entries, date})
+  end
+
+  defp via_tuple(list_name) do
+    Todo.ProcessRegistry.via_tuple({__MODULE__, list_name})
+  end
 
   # Server functions used by GenServer
 
@@ -20,20 +39,5 @@ defmodule Todo.Server do
     Todo.Database.store(list_name, new_list)
 
     {:noreply, {list_name, new_list}}
-  end
-
-  # Interface functions used by the Todo.Server client
-
-  def start_link(list_name) do
-    IO.puts("Starting Todo Server")
-    GenServer.start_link(__MODULE__, list_name)
-  end
-
-  def add_entry(pid, new_entry) do
-    GenServer.cast(pid, {:add_entry, new_entry})
-  end
-
-  def entries(pid, date) do
-    GenServer.call(pid, {:entries, date})
   end
 end
