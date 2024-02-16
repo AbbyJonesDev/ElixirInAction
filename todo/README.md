@@ -27,11 +27,8 @@ iex -S mix
 
 ```elixir
 
-# Start the cache
-{:ok, cache} = Todo.Cache.start()
-
 # Create a list
-bob = Todo.Cache.server_process(cache, "bob's list")
+bob = Todo.Cache.server_process("bob's list")
 
 # Add an entry
 Todo.Server.add_entry(bob, %{date: ~D[2024-01-15], title: "Elixir in Action Ch 7"})
