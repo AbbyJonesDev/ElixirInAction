@@ -1,6 +1,6 @@
 defmodule Todo.Database do
   @pool_size 3
-  @db_folder "./persist"
+  @db_folder Application.compile_env!(:todo, :database_folder)
 
   # Must be defined manually because module is a supervisor now
   # and doesn't implement GenServer (which would provide a default)
@@ -15,7 +15,7 @@ defmodule Todo.Database do
         worker_module: Todo.DatabaseWorker,
         size: @pool_size
       ],
-      [db_folder: @db_folder]
+      db_folder: @db_folder
     )
   end
 
